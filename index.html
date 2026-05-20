@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+
+<link rel="manifest" href="manifest.json">
+
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Simple POS">
+
+<link rel="apple-touch-icon" href="icon-192.png">
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Simple POS</title>
+
+<style>
+body {
+    font-family: Arial;
+    background:#1e1e1e;
+    color:white;
+    margin:0;
+}
+
+.container { display:flex; height:100vh; }
+
+.left { width:65%; padding:10px; }
+.right { width:35%; background:#2a2a2a; padding:15px; }
+
+button {
+    background:#444;
+    color:white;
+    border:none;
+    padding:20px;
+    margin:8px;
+    border-radius:15px;
+    font-size:18px;
+    min-width:110px;
+}
+
+button:hover { background:#666; }
+
+.category {
+    background:#0078d4;
+    font-size:22px;
+}
+
+.item {
+    width:30%;
+    font-size:35px;
+}
+
+.topbar { display:flex; flex-wrap:wrap; }
+
+#items {
+    display:flex;
+    flex-wrap:wrap;
+}
+
+#cart {
+    max-height:300px;
+    overflow-y:auto;
+}
+
+.cart-item {
+    display:flex;
+    justify-content:space-between;
+    margin:8px 0;
+    font-size:18px;
+}
+
+.pay {
+    background:green;
+    font-size:22px;
+    width:100%;
+}
+
+.popup {
+    position:fixed;
+    top:0; left:0;
+    width:100%; height:100%;
+    background:rgba(0,0,0,0.7);
+    display:none;
+    align-items:center;
+    justify-content:center;
+}
+
+.popup-content {
+    background:#333;
+    padding:25px;
+    border-radius:15px;
+    text-align:center;
+}
+
+.stats { margin-top:15px; font-size:18px; }
+</style>
+</head>
+
+<script>
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("service-worker.js");
+}
+</script>
+
+<body>
+
+<div class="container">
+
+<div class="left">
+    <div class="topbar" id="categories"></div>
+    <div id="items"></div>
+</div>
+
+<div class="right">
+    <h2>Winkelwagen</h2>
+    <div id="cart"></div>
+    <h3>Totaal: € <span id="total">0.00</span></h3>
+
+    <button class="pay" onclick="pay()">PIN</button>
+	<button onclick="clearCart()">Leeg winkelwagen</button>
+    <button onclick="exportLog()">LOG File</button>
+
+
+    <div class="stats">
+        <p>Dagomzet: € <span id="revenue">0.00</span></p>
+        <p>Transacties: <span id="transactions">0</span></p>
+    </div>
+</div>
+
+</div>
+
+<div class="popup" id="adminPopup">
+    <div class="popup-content">
+        <h2>Admin Menu</h2>
+
+        <button onclick="resetRevenue()">Reset dagomzet</button>
+        <button onclick="exportMonth()">Export maandlog</button>
+        <button onclick="editPrices()">Pas prijzen aan</button>
+
+        <br><br>
+        <button onclick="closeAdmin()">Sluiten</button>
+    </div>
+</div>
+
+
+<div class="popup" id="pricePopup">
+    <div class="popup-content" style="width:400px; max-height:500px; overflow-y:auto;">
+        <h2>Prijzen aanpassen</h2>
+        <div id="priceList"></div>
+
+        <br>
+        <button onclick="closePriceEditor()">Sluiten</button>
+    </div>
+</div>
+
+
+<div class="popup" id="popup">
+    <div class="popup-content">
+        <h2>Betalen € <span id="payAmount"></span></h2>
+        <button onclick="confirmPayment()">Bevestigen</button>
+    </div>
+</div>
+
+<script>
+let savedData = localStorage.getItem("posData");
+if (savedData) {
+    data = JSON.parse(savedData);
+}
+
+
+let data = {
+    "🥖 Brood": {"Pistolet":0.50,"Bol zacht":0.85,"Bol hard":1.40,"Boterham":0.20},
+    "🧀 Beleg": {"Smeer salade":1.50,"Plakken beleg":0.90,"Worst":1.00,"Ei":0.50,"Zoet beleg":0.40},
+    "🥤 Drank": {"Vitamine water":2.30,"Ice Tea":2.30,"Cola":1.70,"Fanta":1.70,"Cassis":1.70},
+    "🍪 Snacks": {"Gevulde Koek":1.55,"Stroopwafel":1.00,"Peperkoek":1.00,"Muffin":1.55},
+    "🍲 Soep": {"Soep":0.95},
+    "🥗 Salade": {"Klein":0.85,"Middel":1.45,"Groot":2.10},
+    "🍽 Daghap": {"Broodje":3.25,"Snack":2.50}
+};
+
+let cart = {};
+
+function loadCategories() {
+    let el = document.getElementById("categories");
+    for (let cat in data) {
+        let btn = document.createElement("button");
+        btn.innerText = cat;
+        btn.className = "category";
+        btn.onclick = () => showItems(cat);
+        el.appendChild(btn);
+    }
+}
+
+
+function openAdmin() {
+    let pin = prompt("Voer PIN in:");
+
+    if(pin === "1234") {
+        document.getElementById("adminPopup").style.display = "flex";
+    } else {
+        alert("Foute PIN");
+    }
+}
+
+
+function closeAdmin() {
+    document.getElementById("adminPopup").style.display = "none";
+}
+
+
+function resetRevenue() {
+    if(confirm("Weet je het zeker?")) {
+        localStorage.setItem("revenue", 0);
+        localStorage.setItem("transactions", 0);
+        updateStats();
+        alert("Dagomzet gereset");
+    }
+}
+
+function exportMonth() {
+    let log = JSON.parse(localStorage.getItem("log") || "[]");
+
+    let now = new Date();
+    let month = now.getMonth();
+    let year = now.getFullYear();
+
+    let filtered = log.filter(t => {
+        let d = new Date(t.date);
+        return d.getMonth() === month && d.getFullYear() === year;
+    });
+
+    let text = "Datum\tItems\tTotaal (€)\n";
+
+    filtered.forEach(t => {
+        text += `${t.date}\t${t.items}\t${t.total}\n`;
+    });
+
+    let filename = `POS-MAAND-${year}-${month+1}.txt`;
+
+    let blob = new Blob([text], {type:"text/plain"});
+    let a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+}
+
+
+function editPrices() {
+    let container = document.getElementById("priceList");
+    container.innerHTML = "";
+
+    for (let cat in data) {
+
+        let title = document.createElement("h3");
+        title.innerText = cat;
+        container.appendChild(title);
+
+        for (let item in data[cat]) {
+            let price = data[cat][item];
+
+            let row = document.createElement("div");
+            row.style.display = "flex";
+            row.style.justifyContent = "space-between";
+            row.style.margin = "5px 0";
+
+            row.innerHTML = `
+                <span>${item}</span>
+                <input type="number" step="0.01" value="${price}" 
+                    onchange="updatePrice('${cat}','${item}', this.value)">
+            `;
+
+            container.appendChild(row);
+        }
+    }
+
+    document.getElementById("pricePopup").style.display = "flex";
+}
+
+function updatePrice(category, item, newPrice) {
+    newPrice = parseFloat(newPrice);
+
+    if (isNaN(newPrice)) {
+        alert("Ongeldige prijs");
+        return;
+    }
+
+    data[category][item] = newPrice;
+
+    // ✅ opslaan
+    localStorage.setItem("posData", JSON.stringify(data));
+}
+
+
+function closePriceEditor() {
+    document.getElementById("pricePopup").style.display = "none";
+}
+
+
+function clearCart() {
+    cart = {};
+    updateCart();
+}
+
+
+function showItems(cat) {
+    let el = document.getElementById("items");
+    el.innerHTML = "";
+    for (let item in data[cat]) {
+        let btn = document.createElement("button");
+        btn.innerText = item;
+        btn.className = "item";
+        btn.onclick = () => addToCart(item);
+        el.appendChild(btn);
+    }
+}
+
+function addToCart(name) {
+    if (!cart[name]) cart[name] = 0;
+    cart[name]++;
+    updateCart();
+}
+
+function removeItem(name) {
+    cart[name]--;
+    if (cart[name] <= 0) delete cart[name];
+    updateCart();
+}
+
+function updateCart() {
+    let el = document.getElementById("cart");
+    el.innerHTML = "";
+    let total = 0;
+
+    for (let item in cart) {
+        let qty = cart[item];
+        let price = getPrice(item);
+        let lineTotal = price * qty;
+        total += lineTotal;
+
+        let div = document.createElement("div");
+        div.className = "cart-item";
+        div.innerHTML = `${item} x${qty} <span>€ ${lineTotal.toFixed(2)}</span>`;
+        div.onclick = () => removeItem(item);
+
+        el.appendChild(div);
+    }
+
+    document.getElementById("total").innerText = total.toFixed(2);
+}
+
+function getPrice(item) {
+    for (let cat in data) {
+        if (data[cat][item] !== undefined) return data[cat][item];
+    }
+}
+
+function pay() {
+    let total = parseFloat(document.getElementById("total").innerText);
+
+    if (total === 0) {
+        alert("Winkelwagen is leeg");
+        return;
+    }
+
+    document.getElementById("payAmount").innerText = total.toFixed(2);
+    document.getElementById("popup").style.display = "flex";
+}
+
+function confirmPayment() {
+    let total = parseFloat(document.getElementById("total").innerText);
+
+    let revenue = parseFloat(localStorage.getItem("revenue") || 0);
+    let transactions = parseInt(localStorage.getItem("transactions") || 0);
+
+    revenue += total;
+    transactions++;
+
+    localStorage.setItem("revenue", revenue.toFixed(2));
+    localStorage.setItem("transactions", transactions);
+
+    let log = JSON.parse(localStorage.getItem("log") || "[]");
+
+    let itemsString = Object.entries(cart)
+        .map(([name, qty]) => `${name} x${qty}`)
+        .join(", ");
+
+    log.push({
+        date: new Date().toLocaleString(),
+        items: itemsString,
+        total: total.toFixed(2)
+    });
+
+    localStorage.setItem("log", JSON.stringify(log));
+
+    cart = {};
+    updateCart();
+    updateStats();
+
+    document.getElementById("popup").style.display = "none";
+}
+
+function updateStats() {
+    document.getElementById("revenue").innerText =
+        parseFloat(localStorage.getItem("revenue") || 0).toFixed(2);
+
+    document.getElementById("transactions").innerText =
+        localStorage.getItem("transactions") || 0;
+}
+
+function endDay() {
+    if(confirm("Dag afsluiten?")) {
+        localStorage.setItem("revenue", 0);
+        localStorage.setItem("transactions", 0);
+        localStorage.setItem("log", "[]");
+    }
+    updateStats();
+}
+
+function exportLog() {
+
+    let log = JSON.parse(localStorage.getItem("log") || "[]");
+
+    let text = "Datum\tItems\tTotaal (€)\n";
+
+    log.forEach(t => {
+        text += `${t.date}\t${t.items}\t${t.total}\n`;
+    });
+
+    // 📅 Huidige datum ophalen (YYYY-MM-DD)
+    let today = new Date();
+    let dateString = today.getFullYear() + "-" +
+        String(today.getMonth() + 1).padStart(2, '0') + "-" +
+        String(today.getDate()).padStart(2, '0');
+
+    // 📁 Bestandsnaam aanpassen
+    let filename = `POS-LOG-${dateString}.txt`;
+
+    let blob = new Blob([text], {type:"text/plain"});
+    let a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+
+}
+
+loadCategories();
+updateStats();
+
+</script>
+
+</body>
+</html>
